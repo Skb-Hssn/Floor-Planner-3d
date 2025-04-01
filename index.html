@@ -41,16 +41,15 @@
 
         // --- Three.js Variables ---
         let scene, camera, renderer, controls;
-        // --- TODO 1: Taller Walls ---
-        const initialWallHeight = 15; // Significantly increased default height
+        // --- TODO: Shorter Walls ---
+        const initialWallHeight = 2; // Further reduced default height
         let wallThickness = 0.3;
         const worldScale = 0.05;
-        // --- Adjust Scaling Range for Taller Walls ---
-        const dynamicHeightMinScale = 0.02; // Min scale (front) - very short
-        const dynamicHeightMaxScale = 2.5;  // Max scale (back) - very tall
-
-        const cameraDir = new THREE.Vector3();
-        const cameraToWallVec = new THREE.Vector3();
+        const dynamicHeightMinScale = 0.15; // Keep scaling less aggressive
+        const dynamicHeightMaxScale = 1.75;
+        const minDistForScaling = 5;
+        const maxDistForScaling = 60;
+        const floorColor = 0xdeb887;
 
         // --- 2D Drawing Functions (Unchanged) ---
         function drawGrid() { ctx.beginPath(); ctx.strokeStyle = "#cccccc"; ctx.lineWidth = 0.5; for (let x = 0; x <= canvas.width; x += gridSpacing) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); } for (let y = 0; y <= canvas.height; y += gridSpacing) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); } ctx.stroke(); }
@@ -70,8 +69,7 @@
         // --- Three.js Functions ---
         function initThreeJS() {
             scene = new THREE.Scene();
-            // Change FOV slightly? Optional.
-            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000); // Slightly narrower FOV
+            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
             renderer.setClearColor(0xf8f8f8, 1);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -80,23 +78,23 @@
             threeContainer.appendChild(renderer.domElement);
 
             const estPlanWidth = canvas.width * worldScale; const estPlanHeight = canvas.height * worldScale;
-            // Adjust initial camera position for taller walls - higher and further back
-            camera.position.set(0, Math.max(estPlanWidth, estPlanHeight) * 2.0, Math.max(estPlanWidth, estPlanHeight) * 1.8);
+            // Slightly lowered camera Y
+            camera.position.set(0, Math.max(estPlanWidth, estPlanHeight) * 1.6, Math.max(estPlanWidth, estPlanHeight) * 1.6);
 
-            const ambientLight = new THREE.AmbientLight(0x909090); // Slightly brighter ambient
-            scene.add(ambientLight);
+            const ambientLight = new THREE.AmbientLight(0x909090); scene.add(ambientLight);
             const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-            directionalLight.position.set(10, initialWallHeight * 1.5, 12); // Adjust light position relative to wall height
+            // Adjust light Y position relative to new height
+            directionalLight.position.set(10, initialWallHeight * 2.0, 12); // Lowered light source
             scene.add(directionalLight);
             const gridHelper = new THREE.GridHelper(Math.max(canvas.width, canvas.height) * worldScale * 1.2, 10, 0xbbbbbb, 0x888888);
             gridHelper.position.y = -0.01; scene.add(gridHelper);
 
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enabled = false; controls.enableDamping = true; controls.dampingFactor = 0.05;
-            controls.screenSpacePanning = false; controls.minDistance = 1; controls.maxDistance = 1000; // Increase max distance
+            controls.screenSpacePanning = false; controls.minDistance = 1; controls.maxDistance = 1000;
             controls.maxPolarAngle = Math.PI;
-            // Adjust target y based on new taller height
-            controls.target.set(0, initialWallHeight / 3, 0); // Target lower part of the walls
+            // Adjust target y for new height
+            controls.target.set(0, initialWallHeight / 3.5, 0); // Aim slightly lower part of the walls
 
             window.addEventListener('resize', onWindowResize, false);
         }
@@ -108,8 +106,8 @@
              if (is3DMode) { renderer.render(scene, camera); }
         }
 
-        function createWalls() {
-            scene.children.filter(obj => obj.name === 'wall').forEach(obj => scene.remove(obj));
+        function createStructure() {
+            scene.children.filter(obj => obj.name === 'wall' || obj.name === 'floor').forEach(obj => scene.remove(obj));
             if (lines.length === 0) return;
             let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
             lines.forEach(line => { minX = Math.min(minX, line.startX, line.endX); maxX = Math.max(maxX, line.startX, line.endX); minY = Math.min(minY, line.startY, line.endY); maxY = Math.max(maxY, line.startY, line.endY); });
@@ -125,21 +123,27 @@
                 const hue = (index * 0.13) % 1.0; const saturation = 0.6 + Math.random() * 0.2; const lightness = 0.75 + Math.random() * 0.1;
                 wallMaterial.color.setHSL(hue, saturation, lightness); wallMaterial.color.convertSRGBToLinear();
 
-                // Geometry uses the taller initialWallHeight
+                // Geometry uses the new initialWallHeight
                 const wallGeometry = new THREE.BoxGeometry(length, initialWallHeight, wallThickness);
                 const wall = new THREE.Mesh(wallGeometry, wallMaterial);
                 wall.name = 'wall';
-
                 wall.position.set( worldStartX + dx / 2, initialWallHeight / 2, worldStartZ + dz / 2 );
                 const angle = Math.atan2(-dz, dx); wall.rotation.y = angle;
-                wall.scale.set(1, 1, 1); // Start at scale 1
-
+                wall.scale.set(1, 1, 1);
                 scene.add(wall);
             });
 
-             controls.target.set(0, initialWallHeight / 3, 0); // Re-center target
-             camera.lookAt(controls.target);
-             controls.update();
+            const floorPadding = 1.0;
+            const worldWidth = (maxX - minX) * worldScale + floorPadding; const worldDepth = (maxY - minY) * worldScale + floorPadding;
+            const floorGeometry = new THREE.PlaneGeometry(worldWidth, worldDepth);
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: floorColor, side: THREE.DoubleSide });
+            const floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
+            floorMesh.name = 'floor'; floorMesh.rotation.x = -Math.PI / 2; floorMesh.position.y = -0.05;
+            floorMesh.position.x = 0; floorMesh.position.z = 0; scene.add(floorMesh);
+
+            controls.target.set(0, initialWallHeight / 3.5, 0); // Re-center target
+            camera.lookAt(controls.target);
+            controls.update();
         }
 
         function animate() {
@@ -148,38 +152,26 @@
             if (is3DMode && controls && renderer && threeContainer.style.display !== 'none') {
                 controls.update();
 
-                // --- Dynamic Wall Height Logic (Re-confirming parameters) ---
-                camera.getWorldDirection(cameraDir); // Direction camera is looking
-                cameraDir.normalize();
-
+                // Dynamic Wall Height Logic (Distance based)
                 scene.children.forEach(obj => {
                     if (obj.name === 'wall' && obj.isMesh) {
-                        // Vector from camera TO wall center
-                        cameraToWallVec.subVectors(obj.position, camera.position).normalize();
-
-                        // Dot product: closer to 1 = wall is in front, closer to -1 = wall is behind
-                        const dot = cameraToWallVec.dot(cameraDir);
-
-                        // Map dot product [-1, 1] to scale [maxScale, minScale]
-                        // If dot is 1 (front), scale is minScale. If dot is -1 (back), scale is maxScale.
-                        const scaleY = THREE.MathUtils.mapLinear(dot, -1, 1, dynamicHeightMaxScale, dynamicHeightMinScale);
+                        const distance = camera.position.distanceTo(obj.position);
+                        // Use the correct initialWallHeight here
+                        const scaleY = THREE.MathUtils.mapLinear( distance, minDistForScaling, maxDistForScaling, dynamicHeightMinScale, dynamicHeightMaxScale );
                         const clampedScaleY = THREE.MathUtils.clamp(scaleY, dynamicHeightMinScale, dynamicHeightMaxScale);
-
                         if (Math.abs(obj.scale.y - clampedScaleY) > 0.001) {
                             obj.scale.y = clampedScaleY;
-                            // Adjust position so base stays near y=0
-                            obj.position.y = (initialWallHeight * clampedScaleY) / 2;
+                            obj.position.y = (initialWallHeight * clampedScaleY) / 2; // Use correct height variable
                         }
                     }
                 });
-                // --- End Dynamic Wall Height ---
 
                 renderer.render(scene, camera);
             }
         }
 
         // --- UI Mode Switching (Unchanged) ---
-        function switchTo3DMode() { is3DMode = true; toggleViewButton.textContent = "Edit 2D Plan"; toggleViewButton.style.backgroundColor = "#ff9800"; createWalls(); threeContainer.style.display = 'block'; threeContainer.style.pointerEvents = 'auto'; controls.enabled = true; canvas.style.pointerEvents = 'none'; canvas.style.opacity = '0.5'; canvas.style.cursor = 'default'; hideDeleteButton(); onWindowResize(); renderer.render(scene, camera); }
+        function switchTo3DMode() { is3DMode = true; toggleViewButton.textContent = "Edit 2D Plan"; toggleViewButton.style.backgroundColor = "#ff9800"; createStructure(); threeContainer.style.display = 'block'; threeContainer.style.pointerEvents = 'auto'; controls.enabled = true; canvas.style.pointerEvents = 'none'; canvas.style.opacity = '0.5'; canvas.style.cursor = 'default'; hideDeleteButton(); onWindowResize(); renderer.render(scene, camera); }
         function switchTo2DMode() { is3DMode = false; toggleViewButton.textContent = "Show 3D Walls"; toggleViewButton.style.backgroundColor = "#4CAF50"; controls.enabled = false; threeContainer.style.pointerEvents = 'none'; threeContainer.style.display = 'none'; canvas.style.pointerEvents = 'auto'; canvas.style.opacity = '1'; canvas.style.cursor = 'crosshair'; redrawLines(); }
 
         // --- Event Listeners (Unchanged) ---
