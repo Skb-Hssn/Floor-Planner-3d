@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Draw Floor Plan with 3D Walls</title>
+    <style>
+        #myCanvas { border: 2px solid #000; cursor: crosshair; position: relative; z-index: 1; background-color: white; }
+        body { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #e0e0e0; position: relative; overflow: hidden; }
+        #controlsContainer { position: relative; margin-bottom: 10px; }
+        #deleteButton { position: fixed; padding: 8px 12px; background-color: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; display: none; z-index: 30; }
+        #deleteButton:hover { background-color: #d32f2f; }
+        #toggleViewButton { position: absolute; top: 10px; right: 10px; padding: 8px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; z-index: 20; }
+        #toggleViewButton:hover { background-color: #45a049; }
+        #threejs-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display: none; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div id="controlsContainer">
+        <canvas id="myCanvas" width="800" height="500"></canvas>
+        <button id="deleteButton">Delete</button>
+        <button id="toggleViewButton">Show 3D Walls</button>
+    </div>
+    <div id="threejs-container"></div>
+
+    <script>
+        const canvas = document.getElementById("myCanvas");
+        const ctx = canvas.getContext("2d");
+        const threeContainer = document.getElementById('threejs-container');
+        let startX, startY, drawing = false;
+        let lines = [];
+        const circleRadius = 5;
+        const snapRadius = 10;
+        const gridSpacing = 15;
+        let selectedStartPoint = null;
+        let selectedLineIndex = null;
+        const deleteButton = document.getElementById("deleteButton");
+        let hasMoved = false;
+        const toggleViewButton = document.getElementById("toggleViewButton");
+        let is3DMode = false;
+
+        // --- Three.js Variables ---
+        let scene, camera, renderer, controls;
+        // --- TODO 1: Taller Walls ---
+        const initialWallHeight = 15; // Significantly increased default height
+        let wallThickness = 0.3;
+        const worldScale = 0.05;
+        // --- Adjust Scaling Range for Taller Walls ---
+        const dynamicHeightMinScale = 0.02; // Min scale (front) - very short
+        const dynamicHeightMaxScale = 2.5;  // Max scale (back) - very tall
+
+        const cameraDir = new THREE.Vector3();
+        const cameraToWallVec = new THREE.Vector3();
+
+        // --- 2D Drawing Functions (Unchanged) ---
+        function drawGrid() { ctx.beginPath(); ctx.strokeStyle = "#cccccc"; ctx.lineWidth = 0.5; for (let x = 0; x <= canvas.width; x += gridSpacing) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); } for (let y = 0; y <= canvas.height; y += gridSpacing) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); } ctx.stroke(); }
+        function drawCircle(x, y, isStart) { ctx.beginPath(); ctx.arc(x, y, circleRadius, 0, 2 * Math.PI); ctx.fillStyle = isStart ? "green" : "red"; ctx.fill(); }
+        function redrawLines() { ctx.clearRect(0, 0, canvas.width, canvas.height); drawGrid(); lines.forEach((line) => { ctx.beginPath(); ctx.moveTo(line.startX, line.startY); ctx.lineTo(line.endX, line.endY); ctx.strokeStyle = "blue"; ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.stroke(); drawCircle(line.startX, line.startY, true); drawCircle(line.endX, line.endY, false); }); if (selectedStartPoint) { drawCircle(selectedStartPoint.x, selectedStartPoint.y, true); } if (selectedLineIndex === null) { hideDeleteButton(); } }
+        function startDraw(event) { if (is3DMode) return; drawing = true; hasMoved = false; let clickX = event.offsetX; let clickY = event.offsetY; startX = clickX; startY = clickY; let snappedStart = false; for (const line of lines) { if (Math.hypot(clickX - line.startX, clickY - line.startY) < snapRadius) { startX = line.startX; startY = line.startY; snappedStart = true; break; } else if (Math.hypot(clickX - line.endX, clickY - line.endY) < snapRadius) { startX = line.endX; startY = line.endY; snappedStart = true; break; } } if (!snappedStart) { startX = Math.round(startX / gridSpacing) * gridSpacing; startY = Math.round(startY / gridSpacing) * gridSpacing; } selectedStartPoint = { x: startX, y: startY }; redrawLines(); drawCircle(startX, startY, true); }
+        function draw(event) { if (!drawing || is3DMode) return; const currentX = event.offsetX; const currentY = event.offsetY; let previewX = currentX; let previewY = currentY; let snappedPreview = false; for (const line of lines) { if (Math.hypot(previewX - line.startX, previewY - line.startY) < snapRadius) { previewX = line.startX; previewY = line.startY; snappedPreview = true; break; } else if (Math.hypot(previewX - line.endX, previewY - line.endY) < snapRadius) { previewX = line.endX; previewY = line.endY; snappedPreview = true; break; } } if (!snappedPreview) { previewX = Math.round(previewX / gridSpacing) * gridSpacing; previewY = Math.round(previewY / gridSpacing) * gridSpacing; } redrawLines(); ctx.beginPath(); ctx.moveTo(startX, startY); ctx.lineTo(previewX, previewY); ctx.strokeStyle = "rgba(0, 0, 255, 0.5)"; ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.stroke(); drawCircle(previewX, previewY, false); if (Math.hypot(currentX - startX, currentY - startY) > 5) { hasMoved = true; } }
+        function stopDraw(event) { if (!drawing || is3DMode) return; drawing = false; if (!hasMoved) { selectedStartPoint = null; redrawLines(); return; } let endX = event.offsetX; let endY = event.offsetY; let snappedEnd = false; for (const line of lines) { if (Math.hypot(endX - line.startX, endY - line.startY) < snapRadius) { endX = line.startX; endY = line.startY; snappedEnd = true; break; } else if (Math.hypot(endX - line.endX, endY - line.endY) < snapRadius) { endX = line.endX; endY = line.endY; snappedEnd = true; break; } } if (!snappedEnd) { endX = Math.round(endX / gridSpacing) * gridSpacing; endY = Math.round(endY / gridSpacing) * gridSpacing; } const movedDistance = Math.hypot(endX - startX, endY - startY); if (movedDistance > gridSpacing / 4) { lines.push({ startX: startX, startY: startY, endX: endX, endY: endY }); } selectedStartPoint = null; redrawLines(); }
+        function handleMouseDown(event) { if (is3DMode) return; if (event.button === 0) { startDraw(event); } }
+        function handleDoubleClick(event) { if (is3DMode) return; let x = event.offsetX; let y = event.offsetY; let closestLineIndex = -1; let minDistance = snapRadius; lines.forEach((line, index) => { const dist = distanceToLineSegment(x, y, line.startX, line.startY, line.endX, line.endY); if (dist < minDistance) { minDistance = dist; closestLineIndex = index; } }); if (closestLineIndex !== -1) { selectedLineIndex = closestLineIndex; showDeleteButton(event.clientX, event.clientY); } else { hideDeleteButton(); } event.preventDefault(); }
+        function distanceToLineSegment(px, py, x1, y1, x2, y2) { const l2 = Math.hypot(x2 - x1, y2 - y1) ** 2; if (l2 === 0) return Math.hypot(px - x1, py - y1); let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2; t = Math.max(0, Math.min(1, t)); const closestX = x1 + t * (x2 - x1); const closestY = y1 + t * (y2 - y1); return Math.hypot(px - closestX, py - closestY); }
+        function showDeleteButton(clientX, clientY) { deleteButton.style.display = 'block'; deleteButton.style.left = `${clientX + 5}px`; deleteButton.style.top = `${clientY + 5}px`; }
+        function hideDeleteButton() { deleteButton.style.display = 'none'; selectedLineIndex = null; }
+        function deleteSelectedLine() { if (selectedLineIndex !== null && selectedLineIndex >= 0 && selectedLineIndex < lines.length) { lines.splice(selectedLineIndex, 1); redrawLines(); } hideDeleteButton(); }
+
+
+        // --- Three.js Functions ---
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            // Change FOV slightly? Optional.
+            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000); // Slightly narrower FOV
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+            renderer.setClearColor(0xf8f8f8, 1);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            threeContainer.appendChild(renderer.domElement);
+
+            const estPlanWidth = canvas.width * worldScale; const estPlanHeight = canvas.height * worldScale;
+            // Adjust initial camera position for taller walls - higher and further back
+            camera.position.set(0, Math.max(estPlanWidth, estPlanHeight) * 2.0, Math.max(estPlanWidth, estPlanHeight) * 1.8);
+
+            const ambientLight = new THREE.AmbientLight(0x909090); // Slightly brighter ambient
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            directionalLight.position.set(10, initialWallHeight * 1.5, 12); // Adjust light position relative to wall height
+            scene.add(directionalLight);
+            const gridHelper = new THREE.GridHelper(Math.max(canvas.width, canvas.height) * worldScale * 1.2, 10, 0xbbbbbb, 0x888888);
+            gridHelper.position.y = -0.01; scene.add(gridHelper);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enabled = false; controls.enableDamping = true; controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false; controls.minDistance = 1; controls.maxDistance = 1000; // Increase max distance
+            controls.maxPolarAngle = Math.PI;
+            // Adjust target y based on new taller height
+            controls.target.set(0, initialWallHeight / 3, 0); // Target lower part of the walls
+
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+         function onWindowResize() {
+             if (!renderer || !camera) return;
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+             if (is3DMode) { renderer.render(scene, camera); }
+        }
+
+        function createWalls() {
+            scene.children.filter(obj => obj.name === 'wall').forEach(obj => scene.remove(obj));
+            if (lines.length === 0) return;
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            lines.forEach(line => { minX = Math.min(minX, line.startX, line.endX); maxX = Math.max(maxX, line.startX, line.endX); minY = Math.min(minY, line.startY, line.endY); maxY = Math.max(maxY, line.startY, line.endY); });
+            const canvasCenterX = lines.length > 0 ? (minX + maxX) / 2 : canvas.width / 2; const canvasCenterY = lines.length > 0 ? (minY + maxY) / 2 : canvas.height / 2;
+
+            lines.forEach((line, index) => {
+                const worldStartX = (line.startX - canvasCenterX) * worldScale; const worldStartZ = (line.startY - canvasCenterY) * worldScale;
+                const worldEndX = (line.endX - canvasCenterX) * worldScale; const worldEndZ = (line.endY - canvasCenterY) * worldScale;
+                const dx = worldEndX - worldStartX; const dz = worldEndZ - worldStartZ; const length = Math.sqrt(dx * dx + dz * dz);
+                if (length < 0.01) return;
+
+                const wallMaterial = new THREE.MeshStandardMaterial({ roughness: 0.8, metalness: 0.1 });
+                const hue = (index * 0.13) % 1.0; const saturation = 0.6 + Math.random() * 0.2; const lightness = 0.75 + Math.random() * 0.1;
+                wallMaterial.color.setHSL(hue, saturation, lightness); wallMaterial.color.convertSRGBToLinear();
+
+                // Geometry uses the taller initialWallHeight
+                const wallGeometry = new THREE.BoxGeometry(length, initialWallHeight, wallThickness);
+                const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                wall.name = 'wall';
+
+                wall.position.set( worldStartX + dx / 2, initialWallHeight / 2, worldStartZ + dz / 2 );
+                const angle = Math.atan2(-dz, dx); wall.rotation.y = angle;
+                wall.scale.set(1, 1, 1); // Start at scale 1
+
+                scene.add(wall);
+            });
+
+             controls.target.set(0, initialWallHeight / 3, 0); // Re-center target
+             camera.lookAt(controls.target);
+             controls.update();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (is3DMode && controls && renderer && threeContainer.style.display !== 'none') {
+                controls.update();
+
+                // --- Dynamic Wall Height Logic (Re-confirming parameters) ---
+                camera.getWorldDirection(cameraDir); // Direction camera is looking
+                cameraDir.normalize();
+
+                scene.children.forEach(obj => {
+                    if (obj.name === 'wall' && obj.isMesh) {
+                        // Vector from camera TO wall center
+                        cameraToWallVec.subVectors(obj.position, camera.position).normalize();
+
+                        // Dot product: closer to 1 = wall is in front, closer to -1 = wall is behind
+                        const dot = cameraToWallVec.dot(cameraDir);
+
+                        // Map dot product [-1, 1] to scale [maxScale, minScale]
+                        // If dot is 1 (front), scale is minScale. If dot is -1 (back), scale is maxScale.
+                        const scaleY = THREE.MathUtils.mapLinear(dot, -1, 1, dynamicHeightMaxScale, dynamicHeightMinScale);
+                        const clampedScaleY = THREE.MathUtils.clamp(scaleY, dynamicHeightMinScale, dynamicHeightMaxScale);
+
+                        if (Math.abs(obj.scale.y - clampedScaleY) > 0.001) {
+                            obj.scale.y = clampedScaleY;
+                            // Adjust position so base stays near y=0
+                            obj.position.y = (initialWallHeight * clampedScaleY) / 2;
+                        }
+                    }
+                });
+                // --- End Dynamic Wall Height ---
+
+                renderer.render(scene, camera);
+            }
+        }
+
+        // --- UI Mode Switching (Unchanged) ---
+        function switchTo3DMode() { is3DMode = true; toggleViewButton.textContent = "Edit 2D Plan"; toggleViewButton.style.backgroundColor = "#ff9800"; createWalls(); threeContainer.style.display = 'block'; threeContainer.style.pointerEvents = 'auto'; controls.enabled = true; canvas.style.pointerEvents = 'none'; canvas.style.opacity = '0.5'; canvas.style.cursor = 'default'; hideDeleteButton(); onWindowResize(); renderer.render(scene, camera); }
+        function switchTo2DMode() { is3DMode = false; toggleViewButton.textContent = "Show 3D Walls"; toggleViewButton.style.backgroundColor = "#4CAF50"; controls.enabled = false; threeContainer.style.pointerEvents = 'none'; threeContainer.style.display = 'none'; canvas.style.pointerEvents = 'auto'; canvas.style.opacity = '1'; canvas.style.cursor = 'crosshair'; redrawLines(); }
+
+        // --- Event Listeners (Unchanged) ---
+        canvas.addEventListener("mousedown", handleMouseDown); canvas.addEventListener("mousemove", draw); canvas.addEventListener("mouseup", stopDraw); canvas.addEventListener("mouseout", (e) => { if (drawing && !is3DMode) { stopDraw(e); } }); canvas.addEventListener("dblclick", handleDoubleClick); deleteButton.addEventListener('click', deleteSelectedLine); toggleViewButton.addEventListener('click', () => { if (is3DMode) { switchTo2DMode(); } else { switchTo3DMode(); } }); document.addEventListener('click', (event) => { if (deleteButton.style.display === 'block' && !deleteButton.contains(event.target) && !canvas.contains(event.target)) { hideDeleteButton(); } }, true);
+
+        // --- Initialization ---
+        function init() { initThreeJS(); animate(); switchTo2DMode(); }
+        init();
+
+    </script>
+</body>
+</html>
